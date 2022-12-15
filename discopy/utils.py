@@ -6,18 +6,69 @@ from __future__ import annotations
 
 import json
 
-from collections.abc import Mapping, Iterable
-
 from discopy import messages
 
+from typing import Callable, Generic, Mapping, Iterable, TypeVar, Any, Hashable
 
-class Dict:
-    """ dict-like object from callable. """
-    def __init__(self, func: Callable):
-        self.func = func
+from copy import deepcopy
 
-    def __getitem__(self, key):
-        return self.func(key)
+
+KT = TypeVar('KT')
+VT = TypeVar('VT')
+
+
+class MappingOrCallable(Generic[KT, VT]):
+    """ function-like object from a Mapping. """
+    @property
+    def is_dict(self):
+        return isinstance(self.mapping, dict)
+
+    def __init__(self, mapping: Mapping[KT, VT] | Callable[[KT], VT]) -> None:
+        if isinstance(mapping, MappingOrCallable):
+            self.mapping = deepcopy(mapping.mapping)
+            self._inner_mapping = deepcopy(mapping._inner_mapping)
+        else:
+            self.mapping = mapping
+            self._inner_mapping: dict[KT, VT] = {}
+
+    def __getitem__(self, item: KT) -> VT:
+        if isinstance(self.mapping, Mapping):
+            return self.mapping[item]
+        elif isinstance(item, Hashable)\
+                and item in self._inner_mapping:
+            return self._inner_mapping[item]
+        else:
+            return self.mapping(item)
+
+    def __setitem__(self, key: KT, value: VT) -> None:
+        if callable(setter := getattr(self.mapping, '__setitem__', None)):
+            setter(key, value)
+        else:
+            self._inner_mapping[key] = value
+
+    __call__ = __getitem__
+
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, MappingOrCallable) and \
+            self.mapping == other.mapping and \
+            self._inner_mapping == other._inner_mapping
+
+    def __repr__(self):
+        return self.mapping.__repr__()
+
+    def then(self, other: Mapping[KT, VT] | Callable[[KT], VT]) ->\
+            MappingOrCallable[KT, VT]:
+        def access_other(x):
+            return other[x] if isinstance(other, Mapping) else other(x)
+
+        ret = MappingOrCallable(
+            {x: access_other(y) for x, y in self.mapping.items()}
+            if isinstance(self.mapping, dict)
+            else lambda x: access_other(self(x))
+        )
+        ret._inner_mapping =\
+            {x: access_other(y) for x, y in self._inner_mapping.items()}
+        return ret
 
 
 def product(xs: list, unit=1):

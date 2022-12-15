@@ -80,17 +80,19 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import total_ordering, cached_property
-from collections.abc import Callable, Mapping, Iterable
 
 from discopy import messages, utils
 from discopy.utils import (
     factory_name,
     from_tree,
     rsubs,
-    rmap,
     assert_isinstance,
-    Dict,
+    MappingOrCallable,
 )
+
+from typing import TYPE_CHECKING, Callable, Mapping, Iterable
+if TYPE_CHECKING:
+    from discopy import monoidal
 
 dumps, loads = utils.dumps, utils.loads
 
@@ -207,6 +209,9 @@ class Composable(ABC):
     >>> assert List([1, 2]) >> List([3]) == List([1, 2, 3])
     >>> assert List([3]) << List([1, 2]) == List([1, 2, 3])
     """
+    dom: monoidal.Ty
+    cod: monoidal.Ty
+
     @abstractmethod
     def then(self, other: Composable) -> Composable:
         """
@@ -866,7 +871,8 @@ class Functor(Composable):
     >>> m.data.append(False)
     >>> assert F(m) == m[::-1]
     """
-    dom = cod = Category(Ob, Arrow)
+    dom = Category(Ob, Arrow)
+    cod = Category(Ob, Arrow)
 
     @classmethod
     def id(cls, dom: Category = None) -> Functor:
@@ -900,23 +906,24 @@ class Functor(Composable):
         cat.Functor(ob={cat.Ob('x'): cat.Ob('x')}, ar={})
         >>> assert F >> Functor.id() == F != Functor.id() >> F
         >>> print(Functor.id() >> F)  # doctest: +ELLIPSIS
-        cat.Functor(ob=<discopy.utils.Dict object ...>, ar=...)
+        cat.Functor(ob=<function ...>, ar=...)
         """
         assert_isinstance(other, Functor)
         assert_isparallel(self, other)
-        ob = (lambda x: other.ob[self.ob]) if isinstance(self.ob, Dict)\
-            else {x: other.ob[y] for x, y in self.ob.items()}
-        ar = (lambda x: other.ar[self.ar]) if isinstance(self.ar, Dict)\
-            else {x: other.ar[y] for x, y in self.ar.items()}
+        ob = self.ob.then(other.ob)
+        ar = self.ar.then(other.ar)
         result = type(self)(ob, ar, other.cod)
         result.dom = self.dom
         return result
 
-    def __init__(self, ob: Mapping[Ob, Ob] = {}, ar: Mapping[Box, Arrow] = {},
-                 cod: Category = None):
+    def __init__(
+            self,
+            ob: Mapping[Ob, Ob] | Callable[[Ob], Ob] | None = None,
+            ar: Mapping[Box, Arrow] | Callable[[Box], Arrow] | None = None,
+            cod: Category = None):
         self.cod = cod or type(self).cod
-        self.ob = ob if isinstance(ob, Mapping) else Dict(ob)
-        self.ar = ar if isinstance(ar, Mapping) else Dict(ar)
+        self.ob: MappingOrCallable[Ob, Ob] = MappingOrCallable(ob or {})
+        self.ar: MappingOrCallable[Box, Arrow] = MappingOrCallable(ar or {})
 
     def __eq__(self, other):
         return type(self) == type(other)\
